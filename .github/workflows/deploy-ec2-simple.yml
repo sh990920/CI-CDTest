@@ -1,0 +1,44 @@
+name: Deploy to EC2 (Simple)
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH and deploy on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+
+            # 1) 최초 1회만 clone, 이후부터는 pull
+            if [ ! -d "$HOME/apps/CI-CDTest/.git" ]; then
+              cd "$HOME/apps"
+              git clone https://github.com/${{ github.repository }}.git CI-CDTest
+            fi
+
+            cd "$HOME/apps/CI-CDTest"
+            git fetch --all
+            git reset --hard origin/main
+
+            # 2) 빌드 (테스트 포함)
+            ./gradlew clean build
+
+            # 3) 도커 이미지 빌드
+            docker build -t cicdtest:latest .
+
+            # 4) 기존 컨테이너 교체
+            docker stop cicdtest || true
+            docker rm cicdtest || true
+
+            # 5) 컨테이너 실행 (EC2:80 -> 컨테이너:8080)
+            docker run -d --name cicdtest --restart=always -p 80:8080 cicdtest:latest
+
+            # 6) 필요없는 이미지 정리
+            docker image prune -f
